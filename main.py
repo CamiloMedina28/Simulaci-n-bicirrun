@@ -6,6 +6,7 @@ import streamlit.components.v1 as components
 from datetime import time
 import numpy as np
 import random
+import copy
 
 ESTACIONES = {
     "CYT": (4.638181, -74.085202), 
@@ -23,54 +24,34 @@ INITIAL_BIKES = {
     "Calle-53": 5
 }
 
-# matriz_probabilidad_mañana = [
-#     [0, 0, 0.1, 0.6, 0.3],
-#     [0.05, 0, 0.2, 0.35, 0.4],
-#     [0.25, 0.15, 0,	0, 0.6],
-#     [0.3, 0.2, 0, 0, 0.5],
-#     [0.3, 0.2, 0.25, 0.25,0],
-# ]
+CANTIDAD_TRANSFERIR = 20
+MINIMO_POR_ESTACION = 5
 
-# matriz_probabilidad_media_tarde = [
-#     [0, 0.05, 0.25, 0.35, 0.35],
-#     [0.12, 0, 0.3, 0.12, 0.46],
-#     [0.32, 0.12, 0, 0.15, 0.41],
-#     [0.35, 0.4, 0, 0, 0.25],
-#     [0.35, 0.28, 0.27, 0.1, 0]
-# ]
-
-# matriz_probabilidad_tarde = [
-#     [0, 0.22, 0.35, 0.15, 0.28],
-#     [0.12, 0, 0.35, 0.42, 0.11],
-#     [0.25, 0.15, 0, 0.28, 0.32],
-#     [0.3, 0.12, 0.05, 0, 0.53],
-#     [0.45, 0.225, 0.32, 0.005, 0]
-# ]
 # Mañana (6:00 - 9:00)
 matriz_probabilidad_mañana = [
-    [0, 0.25, 0.2, 0.35, 0.2],   # CYT
-    [0.3, 0, 0.25, 0.25, 0.2],   # Uriel
-    [0.2, 0.2, 0, 0.3, 0.3],     # Calle-26
-    [0.25, 0.25, 0.25, 0, 0.25], # Calle-45
-    [0.4, 0.3, 0.2, 0.1, 0]      # Calle-53
+    [0, 0.25, 0.2, 0.35, 0.2],   
+    [0.3, 0, 0.25, 0.25, 0.2],   
+    [0.2, 0.2, 0, 0.3, 0.3],     
+    [0.25, 0.25, 0.25, 0, 0.25], 
+    [0.4, 0.3, 0.2, 0.1, 0]      
 ]
 
 # Media tarde (9:00 - 13:00)
 matriz_probabilidad_media_tarde = [
-    [0, 0.2, 0.2, 0.35, 0.25],   # CYT
-    [0.25, 0, 0.2, 0.25, 0.3],   # Uriel
-    [0.25, 0.25, 0, 0.25, 0.25], # Calle-26
-    [0.2, 0.3, 0.2, 0, 0.3],     # Calle-45
-    [0.35, 0.3, 0.15, 0.2, 0]    # Calle-53
+    [0, 0.2, 0.2, 0.35, 0.25],
+    [0.25, 0, 0.2, 0.25, 0.3],   
+    [0.25, 0.25, 0, 0.25, 0.25],
+    [0.2, 0.3, 0.2, 0, 0.3],    
+    [0.35, 0.3, 0.15, 0.2, 0]   
 ]
 
 # Tarde (13:00 - 16:00)
 matriz_probabilidad_tarde = [
-    [0, 0.25, 0.2, 0.3, 0.25],   # CYT
-    [0.2, 0, 0.25, 0.3, 0.25],   # Uriel
-    [0.2, 0.2, 0, 0.3, 0.3],     # Calle-26
-    [0.25, 0.25, 0.25, 0, 0.25], # Calle-45
-    [0.35, 0.25, 0.2, 0.2, 0]    # Calle-53
+    [0, 0.25, 0.2, 0.3, 0.25],   
+    [0.2, 0, 0.25, 0.3, 0.25],   
+    [0.2, 0.2, 0, 0.3, 0.3],     
+    [0.25, 0.25, 0.25, 0, 0.25], 
+    [0.35, 0.25, 0.2, 0.2, 0]    
 ]
 
 
@@ -152,6 +133,10 @@ class SimulacionBicirrun:
     def __init__(self):
         st.title("Simulación Bicirrun")
         self.user_bikes = {}
+        self.horas = None
+        self.historia = {est: [] for est in ESTACIONES}
+        self.bicicletas = INITIAL_BIKES.copy()
+        self.reabastecimientos = []
 
     def __generar_sliders(self):
         st.subheader("Inventario inicial por estación")
@@ -164,8 +149,113 @@ class SimulacionBicirrun:
             )
         
         self.hora_inicio = st.time_input("Hora de inicio", value=time(6, 0))
-        self.hora_fin = st.time_input("Hora de fin", value=time(16, 0))  
+        self.hora_fin = st.time_input("Hora de fin", value=time(16, 0))
     
+    def run_simulation_for_cost(self, inventario_inicial, hora_inicio, hora_fin):
+        """
+        Función Objetivo: Ejecuta la simulación y devuelve el número total de reabastecimientos.
+        """
+        data = GraficarDemanda(float(hora_inicio.strftime("%H.%M")), float(hora_fin.strftime("%H.%M")))
+        
+        # Pre-calcular demanda y horas
+        demanda_por_estacion = {est: data.get_data(est)[1] for est in ESTACIONES}
+        x = data.get_data(list(ESTACIONES.keys())[0])[0] # Horas
+        
+        bicicletas = inventario_inicial.copy()
+        reabastecimientos_count = 0
+
+        for hora_idx in range(len(x)):
+            hora_actual = x[hora_idx]
+            usuarios_salientes = {}
+            usuarios_entrantes = {est: 0 for est in ESTACIONES}
+
+            for est in ESTACIONES:
+                salida_teorica = int(bicicletas[est] * demanda_por_estacion[est][hora_idx])
+                salida = min(salida_teorica, bicicletas[est])
+                usuarios_salientes[est] = salida
+                bicicletas[est] -= salida
+            
+            for i, est in enumerate(ESTACIONES):
+                salida = usuarios_salientes[est]
+                weights = []
+                if hora_actual <= 9:
+                    weights = matriz_probabilidad_mañana[i]
+                elif hora_actual <= 13:
+                    weights = matriz_probabilidad_media_tarde[i]
+                else:
+                    weights = matriz_probabilidad_tarde[i]
+                
+                for _ in range(salida):
+                    destino = random.choices(list(ESTACIONES.keys()), weights=weights, k=1)[0]
+                    usuarios_entrantes[destino] += 1
+            
+            for est in ESTACIONES:
+                bicicletas[est] += usuarios_entrantes[est]
+
+            for est in ESTACIONES:
+                if bicicletas[est] <= 5: 
+                    donante = max(bicicletas, key=lambda k: bicicletas[k])
+                    if donante != est and bicicletas[donante] > 5:
+                        cantidad = min(5, bicicletas[donante] - 5)
+                        bicicletas[donante] -= cantidad
+                        bicicletas[est] += cantidad
+                        reabastecimientos_count += 1
+        
+        return reabastecimientos_count
+
+    def local_search_optimization(self, hora_inicio, hora_fin, max_iter=1000):
+        """
+        Algoritmo de Búsqueda Local simple para encontrar el inventario inicial óptimo.
+        """
+        estaciones_list = list(ESTACIONES.keys())
+
+        current_inventory = INITIAL_BIKES
+        current_cost = self.run_simulation_for_cost(current_inventory, hora_inicio, hora_fin)
+        best_inventory = current_inventory
+        best_cost = current_cost
+        
+        st.info(f"Costo inicial (reabastecimientos) con la configuración por defecto: **{best_cost}**")
+        progress_bar = st.progress(0)
+        
+        st.subheader("Buscando configuración óptima...")
+        
+        for i in range(max_iter):
+            donor = random.choice(estaciones_list)
+            receiver = random.choice(estaciones_list)
+            
+            if donor != receiver and current_inventory[donor] > 0 and current_inventory[receiver] < 50:
+                
+                neighbor_inventory = copy.copy(current_inventory)
+                neighbor_inventory[donor] -= 1
+                neighbor_inventory[receiver] += 1
+                
+                # 3. Evaluar el vecino
+                neighbor_cost = self.run_simulation_for_cost(neighbor_inventory, hora_inicio, hora_fin)
+                
+                if neighbor_cost <= current_cost:
+                    current_inventory = neighbor_inventory
+                    current_cost = neighbor_cost
+                    
+                    if current_cost < best_cost:
+                        best_cost = current_cost
+                        best_inventory = current_inventory
+                        st.success(f"🎉 ¡Mejora encontrada en la iteración {i+1}! Nuevo Costo Mínimo: **{best_cost}**")
+
+            progress_bar.progress((i + 1) / max_iter)
+
+        st.subheader("Resultado de la Optimización")
+        st.write(f"Costo Mínimo (Reabastecimientos): **{best_cost}**")
+        st.write("Inventario Inicial Óptimo Sugerido:")
+        st.dataframe(pd.DataFrame(list(best_inventory.items()), columns=["Estación", "Bicicletas Óptimas"]))
+        
+        return best_inventory
+
+    
+    def __generar_boton_optimizacion(self):
+        st.subheader("Optimización del rebalanceo")
+        if st.button("Optimización del inventario inicial"):
+            optimal = self.local_search_optimization(self.hora_inicio, self.hora_fin)
+
     def __sumar_bicicletas(self):
         total = sum(self.user_bikes.values())
         st.write(f"{total} bicicletas asignadas de {TOTAL_BICICLETAS_OPERATIVAS}")
@@ -252,91 +342,80 @@ class SimulacionBicirrun:
     def __simular(self):
         data = GraficarDemanda(float(self.hora_inicio.strftime("%H.%M")), float(self.hora_fin.strftime("%H.%M")))
         demanda_por_estacion = {}
-        for est in ESTACIONES:
-            x, y = data.get_data(est)
-            self.x = x
-            demanda_por_estacion[est] = [y_i for y_i in y]
-        
-        self.historia = {est: [] for est in ESTACIONES}
-        bicicletas = self.user_bikes.copy()
-        
-        # Lista para registrar los reabastecimientos
-        self.reabastecimientos = []
+        for estacion in ESTACIONES:
+            horas, y = data.get_data(estacion)
+            self.horas = horas
+            demanda_por_estacion[estacion] = [y_i for y_i in y]
 
-        for hora_idx in range(len(x)):
+        for hora_idx in range(len(self.horas)):
+            hora_actual = self.horas[hora_idx]
             usuarios_salientes = {}
-            usuarios_entrantes = {est: 0 for est in ESTACIONES}
+            usuarios_entrantes = {estacion: 0 for estacion in ESTACIONES}
 
-            # 1️⃣ Calcular salidas
+            # SALIDAS
             for est in ESTACIONES:
-                salida = int(bicicletas[est] * demanda_por_estacion[est][hora_idx])
+                salida_teorica = int(self.bicicletas[est] * demanda_por_estacion[est][hora_idx])
+                salida = min(salida_teorica, self.bicicletas[est])
                 usuarios_salientes[est] = salida
-                bicicletas[est] -= salida
+                self.bicicletas[est] -= salida
             
-            # 2️⃣ Distribuir a destinos según matriz de transición
+            # DISTRIBUCIÓN A DESTINOS
             for i, est in enumerate(ESTACIONES):
                 salida = usuarios_salientes[est]
                 for _ in range(salida):
-                    if x[hora_idx] <= 9:
+                    if hora_actual <= 9:
                         destino = random.choices(list(ESTACIONES.keys()), weights=matriz_probabilidad_mañana[i], k=1)[0]
-                    elif x[hora_idx] <= 13:
+                    elif hora_actual <= 13:
                         destino = random.choices(list(ESTACIONES.keys()), weights=matriz_probabilidad_media_tarde[i], k=1)[0]
                     else:
                         destino = random.choices(list(ESTACIONES.keys()), weights=matriz_probabilidad_tarde[i], k=1)[0]
                     usuarios_entrantes[destino] += 1
             
-            # 3️⃣ Actualizar inventario con llegadas
+            # INVENTARIO ACTUALIZADO
             for est in ESTACIONES:
-                bicicletas[est] += usuarios_entrantes[est]
+                self.bicicletas[est] += usuarios_entrantes[est]
 
-            # 4️⃣ Revisar reabastecimientos
+            # REABASTECIMIENTOS
             for est in ESTACIONES:
-                if bicicletas[est] <= 5:
+                if self.bicicletas[est] <= MINIMO_POR_ESTACION:
                     # Encontrar estación con más bicicletas
-                    donante = max(bicicletas, key=lambda k: bicicletas[k])
-                    if donante != est and bicicletas[donante] > 5:
-                        cantidad = min(5, bicicletas[donante]-5)  # ajustar cantidad a transferir
-                        bicicletas[donante] -= cantidad
-                        bicicletas[est] += cantidad
+                    donante = max(self.bicicletas, key=lambda k: self.bicicletas[k])
+                    if donante != est and self.bicicletas[donante] > MINIMO_POR_ESTACION:
+                        cantidad = min(MINIMO_POR_ESTACION, self.bicicletas[donante]-CANTIDAD_TRANSFERIR)  # ajustar cantidad a transferir
+                        self.bicicletas[donante] -= cantidad
+                        self.bicicletas[est] += cantidad
                         self.reabastecimientos.append({
-                            "Hora": x[hora_idx],
+                            "Hora": hora_actual,
                             "Estación_reabastecida": est,
                             "Estación_donante": donante,
                             "Cantidad": cantidad
                         })
             
-            # 5️⃣ Guardar self.historia
+            # GUARDAR HISTORIAL
             for est in ESTACIONES:
-                self.historia[est].append(bicicletas[est])
+                self.historia[est].append(self.bicicletas[est])
 
-        # Graficar evolución de bicicletas
-        st.subheader("Comportamiento por horas del número de bicicletas")
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(list(ESTACIONES.keys()))
-        for idx, est in enumerate(ESTACIONES):
+    def __evolucion_bicicletas(self):
+        st.subheader("Comportamiento del número de bicicletas en cada estación a lo largo del día")
+        tabs = st.tabs(ESTACIONES)
+        for idx, estacion in enumerate(ESTACIONES):
+            print(idx, estacion)
             df = pd.DataFrame({
-                "Hora": x,
-                "Bicicletas": self.historia[est]
+                'Hora': self.horas,
+                "Bicicletas": self.historia[estacion]
             })
-            fig = px.line(df, x="Hora", y="Bicicletas", title=f"Evolución de bicicletas en {est}")
-            with [tab1, tab2, tab3, tab4, tab5][idx]:
+            fig = px.line(df, x = "Hora", y = "Bicicletas", title = f"Evolución de bicicletas a lo largo del dia en la estación {estacion}")
+            with tabs[idx]:
                 st.plotly_chart(fig, use_container_width=True)
 
-        # Mostrar reabastecimientos
-        if reabastecimientos:
-            st.subheader("Reabastecimientos realizados")
-            st.dataframe(pd.DataFrame(reabastecimientos))
-        else:
-            st.info("No se requirió ningún reabastecimiento durante la simulación.")
 
     def __graficar_todas_estaciones(self):
         st.subheader("Evolución de bicicletas en todas las estaciones")
         
-        # Crear un DataFrame con todas las estaciones
-        df = pd.DataFrame({"Hora": self.x})  # self.x = lista de horas de la simulación
+        df = pd.DataFrame({"Hora": self.horas})
         for est in ESTACIONES:
-            df[est] = self.historia[est]  # historia[est] = lista de bicicletas por hora
+            df[est] = self.historia[est]
 
-        # Crear gráfico con varias líneas, cada estación con un color distinto
         fig = px.line(
             df,
             x="Hora",
@@ -359,8 +438,7 @@ class SimulacionBicirrun:
             with tabs[idx]:
                 m = folium.Map(location=[4.638, -74.084], zoom_start=15)
                 for estacion in ESTACIONES:
-                    # Encontrar el índice más cercano de la hora en tu simulación
-                    hora_sim = np.array(self.x)  # x es la lista de horas de la simulación
+                    hora_sim = np.array(self.horas)
                     hora_idx = (np.abs(hora_sim - hora)).argmin()
                     cantidad = self.historia[estacion][hora_idx]
 
@@ -371,13 +449,47 @@ class SimulacionBicirrun:
                         icon=folium.Icon(color=color)
                     ).add_to(m)
 
-                # st.components.v1.html(m._repr_html_(), height=500)
                 components.html(m._repr_html_(), height=500)
+    
+    def __graficar_reabastecimientos(self):
+        if self.reabastecimientos:
+            st.subheader(f"⚠️ Reabastecimientos realizados (Total: {len(self.reabastecimientos)})")
+            df = pd.DataFrame(self.reabastecimientos)
+
+            df_grouped = df.groupby("Estación_reabastecida")["Cantidad"].sum().reset_index()
+            df_grouped.rename(columns={"Cantidad": "Reabastecimientos"}, inplace=True)
+
+            tab1, tab2, tab3 = st.tabs(["Tabla", "Barras", "Torta"])
+
+            with tab1:
+                st.dataframe(df)
+
+            with tab2:
+                fig_bar = px.bar(
+                    df_grouped,
+                    x="Estación_reabastecida",
+                    y="Reabastecimientos",
+                    text="Reabastecimientos",
+                    color="Estación_reabastecida",
+                    title="Reabastecimientos por estación"
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            with tab3:
+                fig_pie = px.pie(
+                    df_grouped,
+                    names="Estación_reabastecida",
+                    values="Reabastecimientos",
+                    title="Distribución de reabastecimientos"
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("✅ No se requirió ningún reabastecimiento durante la simulación.")
 
 
-            
     def run(self):
         self.__generar_sliders()
+        self.__generar_boton_optimizacion()
         total = self.__sumar_bicicletas()
 
         if total > TOTAL_BICICLETAS_OPERATIVAS:
@@ -390,7 +502,9 @@ class SimulacionBicirrun:
         self.__graficar()
         self.__graficar_demanda()
         self.__simular()
+        self.__evolucion_bicicletas()
         self.__graficar_todas_estaciones()
+        self.__graficar_reabastecimientos()
         self.__generate_maps()
         
 
