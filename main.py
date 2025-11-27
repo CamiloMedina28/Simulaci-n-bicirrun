@@ -24,8 +24,8 @@ INITIAL_BIKES = {
     "Calle-53": 5
 }
 
-CANTIDAD_TRANSFERIR = 20
-MINIMO_POR_ESTACION = 5
+CANTIDAD_TRANSFERIR = 15
+MINIMO_POR_ESTACION = 3
 
 # Mañana (6:00 - 9:00)
 matriz_probabilidad_mañana = [
@@ -101,7 +101,7 @@ class GraficarDemanda():
         return total
     
     def __get_x_axis(self) -> list:
-        return np.arange(self.hora_inicio, self.hora_fin, 0.015)
+        return np.arange(self.hora_inicio, self.hora_fin, 0.05)
     
     def __get_data_frame(self, estacion:str):
         x = self.__get_x_axis()
@@ -193,17 +193,19 @@ class SimulacionBicirrun:
                 bicicletas[est] += usuarios_entrantes[est]
 
             for est in ESTACIONES:
-                if bicicletas[est] <= 5: 
+                if bicicletas[est] <= MINIMO_POR_ESTACION:
                     donante = max(bicicletas, key=lambda k: bicicletas[k])
-                    if donante != est and bicicletas[donante] > 5:
-                        cantidad = min(5, bicicletas[donante] - 5)
+                    if donante != est and bicicletas[donante] > MINIMO_POR_ESTACION:
+                        cantidad = random.randint(MINIMO_POR_ESTACION, CANTIDAD_TRANSFERIR)
+                        
                         bicicletas[donante] -= cantidad
                         bicicletas[est] += cantidad
                         reabastecimientos_count += 1
+
         
         return reabastecimientos_count
 
-    def local_search_optimization(self, hora_inicio, hora_fin, max_iter=1000):
+    def local_search_optimization(self, hora_inicio, hora_fin, max_iter=1000, escenarios = 5):
         """
         Algoritmo de Búsqueda Local simple para encontrar el inventario inicial óptimo.
         """
@@ -230,7 +232,10 @@ class SimulacionBicirrun:
                 neighbor_inventory[receiver] += 1
                 
                 # 3. Evaluar el vecino
-                neighbor_cost = self.run_simulation_for_cost(neighbor_inventory, hora_inicio, hora_fin)
+                sumador = 0
+                for j in range(escenarios):
+                    sumador += self.run_simulation_for_cost(neighbor_inventory, hora_inicio, hora_fin)
+                neighbor_cost = sumador // escenarios
                 
                 if neighbor_cost <= current_cost:
                     current_inventory = neighbor_inventory
@@ -381,7 +386,7 @@ class SimulacionBicirrun:
                     # Encontrar estación con más bicicletas
                     donante = max(self.bicicletas, key=lambda k: self.bicicletas[k])
                     if donante != est and self.bicicletas[donante] > MINIMO_POR_ESTACION:
-                        cantidad = min(MINIMO_POR_ESTACION, self.bicicletas[donante]-CANTIDAD_TRANSFERIR)  # ajustar cantidad a transferir
+                        cantidad = random.randint(MINIMO_POR_ESTACION, CANTIDAD_TRANSFERIR)
                         self.bicicletas[donante] -= cantidad
                         self.bicicletas[est] += cantidad
                         self.reabastecimientos.append({
@@ -456,7 +461,7 @@ class SimulacionBicirrun:
             st.subheader(f"⚠️ Reabastecimientos realizados (Total: {len(self.reabastecimientos)})")
             df = pd.DataFrame(self.reabastecimientos)
 
-            df_grouped = df.groupby("Estación_reabastecida")["Cantidad"].sum().reset_index()
+            df_grouped = df.groupby("Estación_reabastecida")["Cantidad"].count().reset_index()
             df_grouped.rename(columns={"Cantidad": "Reabastecimientos"}, inplace=True)
 
             tab1, tab2, tab3 = st.tabs(["Tabla", "Barras", "Torta"])
